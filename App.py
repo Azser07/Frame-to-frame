@@ -4,63 +4,70 @@ import numpy as np
 import os
 from PIL import Image
 
-st.set_page_config(page_title="Extractor Rápido", layout="centered")
-st.title("📸 Extractor de Fotogramas Críticos")
-st.write("Analizá grabaciones de Instagram y limpiá el temporal automáticamente.")
+st.set_page_config(page_title="Detector de Frames Flash", layout="centered")
+st.title("📸 Capturador de Frames Ocultos")
+st.write("Ideal para detectar el frame de foto entre videos o cuentas regresivas.")
 
 uploaded_file = st.file_uploader("Subí tu grabación de pantalla", type=["mp4", "mov", "avi"])
 
 if uploaded_file is not None:
-    # 1. Creamos un nombre temporal único
     temp_filename = f"temp_video_{os.getpid()}.mp4"
     
-    with st.spinner("Analizando video cuadro por cuadro..."):
-        # Guardamos el archivo para que OpenCV pueda procesarlo
+    with st.spinner("Analizando transiciones rápidas..."):
         with open(temp_filename, "wb") as f:
             f.write(uploaded_file.read())
 
         cap = cv2.VideoCapture(temp_filename)
-        max_diff = 0
-        best_frame = None
+        frames_sospechosos = []
+        scores = []
         
         ret, prev_frame = cap.read()
         if ret:
             prev_gray = cv2.cvtColor(prev_frame, cv2.COLOR_BGR2GRAY)
+            frame_idx = 0
 
             while True:
                 ret, frame = cap.read()
                 if not ret:
                     break
                 
-                # Procesamiento rápido en escala de grises
                 gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                # Calculamos la diferencia con el anterior
                 diff = cv2.absdiff(gray, prev_gray)
-                score = np.sum(diff)
+                score = np.mean(diff) # Usamos el promedio para suavizar ruido
+                scores.append(score)
 
-                if score > max_diff:
-                    max_diff = score
-                    best_frame = frame.copy() # Guardamos copia del mejor frame
+                # Guardamos frames que tengan un cambio significativo
+                # Este es el 'trigger' para frames que duran poco
+                if score > 15: # Umbral de sensibilidad (ajustable)
+                    frames_sospechosos.append((frame_idx, frame.copy(), score))
                 
                 prev_gray = gray
+                frame_idx += 1
 
         cap.release()
-        
-        # 2. ACCIÓN CRÍTICA: Eliminamos el video del servidor inmediatamente
         if os.path.exists(temp_filename):
             os.remove(temp_filename)
 
-    # 3. Mostrar resultados
-    if best_frame is not None:
-        st.success("✅ Análisis completo. El archivo de video fue eliminado del servidor.")
+    # --- RESULTADOS ---
+    if frames_sospechosos:
+        st.success(f"Se detectaron {len(frames_sospechosos)} cambios rápidos.")
         
-        # Convertir para mostrar en web
-        result_img = cv2.cvtColor(best_frame, cv2.COLOR_BGR2RGB)
-        st.image(result_img, caption="Fotograma con el cambio más rápido detectado", use_column_width=True)
+        # Ordenamos por los cambios más fuertes
+        frames_sospechosos.sort(key=lambda x: x[2], reverse=True)
         
-        # Opción de descarga para el usuario
-        res_pil = Image.fromarray(result_img)
-        res_pil.save("captura_detectada.png")
-        with open("captura_detectada.png", "rb") as file:
-            st.download_button("Descargar Imagen", file, "foto_detectada.png", "image/png")
+        st.write("### Posibles capturas encontradas:")
+        # Mostramos los 3 mejores candidatos para que vos elijas el correcto
+        cols = st.columns(2)
+        for i, (idx, f, s) in enumerate(frames_sospechosos[:4]):
+            with cols[i % 2]:
+                img_rgb = cv2.cvtColor(f, cv2.COLOR_BGR2RGB)
+                st.image(img_rgb, caption=f"Candidato {i+1} (Frame {idx})")
+                
+                # Botón de descarga individual
+                res_pil = Image.fromarray(img_rgb)
+                res_pil.save(f"frame_{idx}.png")
+                with open(f"frame_{idx}.png", "rb") as file:
+                    st.download_button(f"Descargar Candidato {i+1}", file, f"foto_{idx}.png", "image/png")
     else:
-        st.error("No se pudo procesar el video.")
+        st.error("No se detectaron cambios bruscos. Intentá con un video más claro.")
